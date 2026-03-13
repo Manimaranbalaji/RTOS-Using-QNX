@@ -1,60 +1,154 @@
-# EXPERIMENT 301
+# Experiment 301: Message Passing between Client and Server in QNX
 
-## Experiment Title  
-**Implementation of Basic Send–Receive–Reply IPC Mechanism in QNX**
+## Aim
 
----
-
-## Objective  
-To implement and test inter-process communication using QNX message passing by completing a checksum server and client program that exchange data using Send, Receive, and Reply primitives.
+To implement **inter-process communication using message passing in QNX**, where a client sends a string to a server and receives a checksum as a reply.
 
 ---
 
-## Problem Statement  
+## Objective
 
-In this project, two source files are provided:
-
-- `server.c`
-- `client.c`
-
-The server functions as a **checksum server** with the following operation:
-
-- The client sends a string to the server.  
-- The server receives the message.  
-- The server computes a checksum for the received string.  
-- The server replies to the client with the calculated checksum.
-
-Both the client and server programs are incomplete. You must carefully trace through the source code and identify comments that indicate where the required logic must be implemented.
+* To understand **QNX message passing mechanism**.
+* To implement **client-server communication using ChannelCreate(), MsgSend(), MsgReceive(), and MsgReply()**.
+* To calculate and return a **checksum for a string sent by the client**.
 
 ---
 
-## Tasks to be Performed  
+## Problem Statement
 
-1. Examine `server.c` and `client.c` and locate the sections marked with comments where code must be added.  
-2. Complete the missing portions of both programs.  
-3. Compile the client and server applications.  
-4. Execute the server program and record its **Process ID (PID)** and **Channel ID (CHID)**.  
-5. Run the client program using the recorded PID and CHID along with a user-defined text string as command-line arguments.  
-6. Observe the output displayed by both the client and the server.  
-7. Verify that the checksum sent by the server matches the input string.
+Design a **QNX server and client program** where:
+
+* The **server creates a communication channel** and waits for messages from clients.
+* The **client connects to the server using the server's PID and Channel ID**.
+* The client sends a **string message** to the server.
+* The server calculates a **checksum of the string**.
+* The server replies with the **calculated checksum**.
+* The client receives and prints the checksum.
 
 ---
-#### client.c
+
+# Algorithm
+
+## Server Algorithm
+
+1. Start the server program.
+2. Create a communication channel using `ChannelCreate()`.
+3. Obtain the process ID using `getpid()`.
+4. Display the server **PID and Channel ID**.
+5. Enter an infinite loop to receive messages from clients.
+6. Wait for a message using `MsgReceive()`.
+7. Check the received message type.
+8. If the message type is **checksum request**:
+
+   * Extract the string from the message.
+   * Call the checksum calculation function.
+9. Compute the checksum by summing ASCII values of characters in the string.
+10. Send the checksum back to the client using `MsgReply()`.
+11. If the message type is unknown, return an error using `MsgError()`.
+12. Continue waiting for the next message.
+
+---
+
+## Client Algorithm
+
+1. Start the client program.
+2. Verify that command line arguments are provided.
+3. Read the following inputs from the arguments:
+
+   * Server PID
+   * Server Channel ID
+   * String to send.
+4. Establish a connection with the server using `ConnectAttach()`.
+5. Create a message structure containing the message type and string.
+6. Send the message to the server using `MsgSend()`.
+7. Wait for the server reply.
+8. Receive the checksum value from the server.
+9. Display the received checksum.
+10. Terminate the client program.
+
+---
+
+# Program
+
+## Server Program (server.c)
+
 ```c
-////////////////////////////////////////////////////////////////////////////////
-// client.c
-//
-// A QNX msg passing client.  It's purpose is to send a string of text to a
-// server.  The server calculates a checksum and replies back with it.  The client
-// expects the reply to come back as an int
-//
-// This program program must be started with commandline args.  
-// See  if(argc != 4) below
-//
-// To complete the exercise, put in the code, as explained in the comments below
-// Look up function arguments in the course book or the QNX documentation.
-////////////////////////////////////////////////////////////////////////////////
+#include <stdio.h>
+#include <stdlib.h>
+#include <errno.h>
+#include <sys/neutrino.h>
+#include <process.h>
+#include "msg_def.h"
 
+int calculate_checksum(char *text);
+
+int main(void)
+{
+    int chid;
+    int pid;
+    rcvid_t rcvid;
+    cksum_msg_t msg;
+    int status;
+    int checksum;
+
+    chid = ChannelCreate(0);
+    if (chid == -1)
+    {
+        perror("ChannelCreate()");
+        exit(EXIT_FAILURE);
+    }
+
+    pid = getpid();
+    printf("Server's pid: %d, chid: %d\n", pid, chid);
+
+    while (1)
+    {
+        rcvid = MsgReceive(chid, &msg, sizeof(msg), NULL);
+        if (rcvid == -1)
+        {
+            perror("MsgReceive");
+            exit(EXIT_FAILURE);
+        }
+
+        if (msg.msg_type == CKSUM_MSG_TYPE)
+        {
+            printf("Got a checksum message\n");
+
+            checksum = calculate_checksum(msg.string_to_cksum);
+
+            status = MsgReply(rcvid, EOK, &checksum, sizeof(checksum));
+            if (status == -1)
+                perror("MsgReply");
+        }
+        else
+        {
+            printf("Got an unknown message type %d\n", msg.msg_type);
+
+            if (MsgError(rcvid, ENOSYS) == -1)
+                perror("MsgError");
+        }
+    }
+
+    return 0;
+}
+
+int calculate_checksum(char *text)
+{
+    char *c;
+    int cksum = 0;
+
+    for (c = text; *c != '\0'; c++)
+        cksum += *c;
+
+    return cksum;
+}
+```
+
+---
+
+## Client Program (client.c)
+
+```c
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -63,153 +157,85 @@ Both the client and server programs are incomplete. You must carefully trace thr
 
 int main(int argc, char* argv[])
 {
-	int coid; //Connection ID to server
-	cksum_msg_t msg;
-	int incoming_checksum; //space for server's reply
-	int status; //status return value used for MsgSend
-	int server_pid; //server's process ID
-	int server_chid; //server's channel ID
+    int coid;
+    cksum_msg_t msg;
+    int incoming_checksum;
+    int status;
+    int server_pid;
+    int server_chid;
 
-	if (argc != 4)
-	{
-		printf("ERROR: This program must be started with commandline arguments, for example:\n\n");
-		printf("   client 482834 1 abcdefghi    \n\n");
-		printf(" 1st arg(482834): server's pid\n");
-		printf(" 2nd arg(1): server's chid\n");
-		printf(" 3rd arg(abcdefghi): string to send to server\n"); //to make it 
-		//easy, let's not bother handling spaces
-		exit(EXIT_FAILURE);
-	}
+    if (argc != 4)
+    {
+        printf("ERROR: This program must be started with commandline arguments\n");
+        printf("Example:\n");
+        printf("client 482834 1 abcdefghi\n");
+        exit(EXIT_FAILURE);
+    }
 
-	server_pid = atoi(argv[1]);
-	server_chid = atoi(argv[2]);
+    server_pid = atoi(argv[1]);
+    server_chid = atoi(argv[2]);
 
-	printf("attempting to establish connection with server pid: %d, chid %d\n", server_pid,
-			server_chid);
+    printf("attempting to establish connection with server pid: %d, chid %d\n",
+           server_pid, server_chid);
 
-	//PUT CODE HERE to establish a connection to the server's channel, store the
-	//connection id in the variable 'coid'
+    coid = ConnectAttach(0, server_pid, server_chid, _NTO_SIDE_CHANNEL, 0);
 
-	if (coid == -1)
-	{ //was there an error attaching to server?
-		perror("ConnectAttach"); //look up error code and print
-		exit(EXIT_FAILURE);
-	}
+    if (coid == -1)
+    {
+        perror("ConnectAttach");
+        exit(EXIT_FAILURE);
+    }
 
-	msg.msg_type = CKSUM_MSG_TYPE;
-	strlcpy(msg.string_to_cksum, argv[3], sizeof(msg.string_to_cksum));
-	printf("Sending string: %s\n", msg.string_to_cksum);
+    msg.msg_type = CKSUM_MSG_TYPE;
+    strlcpy(msg.string_to_cksum, argv[3], sizeof(msg.string_to_cksum));
 
-	//PUT CODE HERE to send message to server and get the reply
+    printf("Sending string: %s\n", msg.string_to_cksum);
 
-	if (status == -1)
-	{ //was there an error sending to server?
-		perror("MsgSend");
-		exit(EXIT_FAILURE);
-	}
+    status = MsgSend(coid, &msg, sizeof(msg),
+                     &incoming_checksum, sizeof(incoming_checksum));
 
-	printf("received checksum=%d from server\n", incoming_checksum);
-	printf("MsgSend return status: %d\n", status);
+    if (status == -1)
+    {
+        perror("MsgSend");
+        exit(EXIT_FAILURE);
+    }
 
-	return EXIT_SUCCESS;
+    printf("received checksum=%d from server\n", incoming_checksum);
+    printf("MsgSend return status: %d\n", status);
+
+    return EXIT_SUCCESS;
 }
 ```
 
-#### server.c
+---
 
-```c
-////////////////////////////////////////////////////////////////////////////////
-// server.c
-//
-// A QNX msg passing server.  It should receive a string from a client,
-// calculate a checksum on it, and reply back the client with the checksum.
-//
-// The server prints out its pid and chid so that the client can be made aware
-// of them.
-//
-// Using the comments below, put code in to complete the program.  Look up
-// function arguments in the course book or the QNX documentation.
-////////////////////////////////////////////////////////////////////////////////
+# Expected Output
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <errno.h>
-#include <sys/neutrino.h>
-#include <process.h>
+### Server Side
 
-#include "msg_def.h"  //layout of msg's should be defined by a struct, here's its definition
-
-int
-calculate_checksum(char *text);
-
-int main(void)
-{
-	int chid;
-	int pid;
-	rcvid_t rcvid;
-	cksum_msg_t msg;
-	int status;
-	int checksum;
-
-	//PUT CODE HERE to create a channel, store channel id in the chid variable
-	if (chid == -1)
-	{ //was there an error creating the channel?
-		perror("ChannelCreate()"); //look up the errno code and print
-		exit(EXIT_FAILURE);
-	}
-
-	pid = getpid(); //get our own pid
-	printf("Server's pid: %d, chid: %d\n", pid, chid); //print our pid/chid so
-	//client can be told where to connect
-
-	while (1)
-	{
-		//PUT CODE HERE to receive msg from client
-
-		if (rcvid == -1)
-		{ //was there an error receiving msg?
-			perror("MsgReceive"); //look up errno code and print
-			exit(EXIT_FAILURE); //give up
-		}
-
-		//PUT CODE HERE to calculate the check sum by calling calculate_checksum()
-
-		//PUT CODE HERE TO reply to client with checksum, store the return status in status
-
-		if (status == -1)
-		{
-			perror("MsgReply");
-		}
-	}
-	return 0;
-}
-
-int calculate_checksum(char *text)
-{
-	char *c;
-	int cksum = 0;
-
-	for (c = text; *c != '\0'; c++)
-		cksum += *c;
-	return cksum;
-}
+```
+Server's pid: 12345, chid: 1
+Got a checksum message
 ```
 
-## Expected Outcome  
+### Client Side
 
-The client should successfully send a string to the server, and the server should return the correct checksum value. Proper IPC communication using Send–Receive–Reply primitives must be demonstrated.
+```
+attempting to establish connection with server pid: 12345, chid 1
+Sending string: abcdefghi
+received checksum=909 from server
+MsgSend return status: 0
+```
 
----
-
-## Program
-
----
-
-## Output
-
----
-
-## Result
+*(The checksum value depends on the ASCII sum of characters in the string.)*
 
 ---
 
+# Output
+
+---
+
+# Result
+
+Thus, the **client-server communication using QNX message passing** was successfully implemented.
+The client sent a string to the server, and the server calculated and returned the **checksum correctly**.
