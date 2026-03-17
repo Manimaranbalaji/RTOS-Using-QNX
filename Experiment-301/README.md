@@ -208,7 +208,23 @@ int main(int argc, char* argv[])
 ```
 
 ---
+## Header file (msg_def.h)
 
+```c
+
+#ifndef MSG_DEF_H
+#define MSG_DEF_H
+
+#define CKSUM_MSG_TYPE  0x01
+#define MAX_STRING_SIZE 256
+
+typedef struct {
+    int msg_type;
+    char string_to_cksum[MAX_STRING_SIZE];
+} cksum_msg_t;
+
+#endif
+```
 # Expected Output
 
 ### Server Side
